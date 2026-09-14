@@ -1,0 +1,35 @@
+volumes:
+  minio-volume:
+    driver: local
+
+services:
+  minio-tblrka:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    environment:
+      - MINIO_ROOT_USER=root
+      - MINIO_ROOT_PASSWORD=rootpass123
+    volumes:
+      - minio-volume:/data
+    ports:
+      - "9222:9000"
+      - "9223:9001"
+    command: [ "server", "--console-address", ":9001", "/data" ]
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+  
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
+    depends_on:
+      minio-tblrka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: 
+    - |
+      set -e
+      mc alias set local http://minio-tblrka:9000 root rootpass123
+      mc mb -p local/minilakehouse

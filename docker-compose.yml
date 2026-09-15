@@ -5,7 +5,7 @@ volumes:
     driver: local
 
 services:
-  minio-tblrka:
+  minio-tblrka: # Это сам S3 на MinIO
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     environment:
       - MINIO_ROOT_USER=root
@@ -13,7 +13,7 @@ services:
     volumes:
       - minio-volume:/data
     ports:
-      - "9222:9000"
+      - "9222:9000" # Оставил порты, чтобы руками можно было через клиент посмотреть
       - "9223:9001"
     command: [ "server", "--console-address", ":9001", "/data" ]
 
@@ -23,7 +23,7 @@ services:
       timeout: 3s
       retries: 3
   
-  minio-init:
+  minio-init: # Инициализация двух бакетов raw и minilakehouse для того, чтобы при запуске не надо было каждый раз самому создавать руками
     image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
     depends_on:
       minio-tblrka:
@@ -37,7 +37,7 @@ services:
       mc mb -p local/raw
       mc mb -p local/minilakehouse
 
-  lakekeeper-db:
+  lakekeeper-db: # DB для Lakekeeper обычная PostgreSQL
     image: postgres:17
     volumes:
       - pg-volume:/var/lib/postgresql/data
@@ -54,7 +54,7 @@ services:
       timeout: 3s
       retries: 3
 
-  lakekeeper:
+  lakekeeper: # Сам Lakekeeper. Взял с их сайта, убрал ненужное по совету клодика
     image: &lakekeeper-image quay.io/lakekeeper/catalog:v0.13.4
     environment: &lakekeeper-environment
       - LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure!
@@ -72,9 +72,9 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "18181:8181"
+      - "18181:8181" # тоже оставил порт, чтобы руками смотреть
 
-  migrate:
+  migrate: # контейнер для создания нужной табличной структуры в бд для Lakekeeper
     image: *lakekeeper-image
     environment: *lakekeeper-environment
     restart: "no"
@@ -83,7 +83,7 @@ services:
       lakekeeper-db:
         condition: service_healthy
 
-  lakekeeper-init:
+  lakekeeper-init: # инициализация lakekeeper сразу же с warehouse. Логика, как с бакетами
     image: curlimages/curl:8.22.0
     restart: "no"
     volumes:

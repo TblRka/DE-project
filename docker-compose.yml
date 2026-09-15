@@ -1,6 +1,8 @@
 volumes:
   minio-volume:
     driver: local
+  pg-volume:
+    driver: local
 
 services:
   minio-tblrka:
@@ -32,4 +34,84 @@ services:
     - |
       set -e
       mc alias set local http://minio-tblrka:9000 root rootpass123
+      mc mb -p local/raw
       mc mb -p local/minilakehouse
+
+  lakekeeper-db:
+    image: postgres:17
+    volumes:
+      - pg-volume:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=pgpass123
+      - POSTGRES_DB=lakekeeper_db
+    ports:
+      - 15432:5432 
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username=admin"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  lakekeeper:
+    image: &lakekeeper-image quay.io/lakekeeper/catalog:v0.13.4
+    environment: &lakekeeper-environment
+      - LAKEKEEPER__PG_ENCRYPTION_KEY=This-is-NOT-Secure!
+      - LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://admin:pgpass123@lakekeeper-db:5432/lakekeeper_db
+      - LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://admin:pgpass123@lakekeeper-db:5432/lakekeeper_db
+      - LAKEKEEPER__AUTHZ_BACKEND=allowall
+    command: [ "serve" ]
+    healthcheck:
+      test: [ "CMD", "/home/nonroot/lakekeeper", "healthcheck" ]
+      interval: 1s
+      timeout: 10s
+      retries: 3
+      start_period: 3s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "18181:8181"
+
+  migrate:
+    image: *lakekeeper-image
+    environment: *lakekeeper-environment
+    restart: "no"
+    command: [ "migrate" ]
+    depends_on:
+      lakekeeper-db:
+        condition: service_healthy
+
+  lakekeeper-init:
+    image: curlimages/curl:8.22.0
+    restart: "no"
+    volumes:
+      - ./lakekeeper/warehouse.json:/warehouse.json:ro
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+    - |
+      set -e
+      base=http://lakekeeper:8181/management/v1
+
+      code=$$(curl -sS -o /tmp/resp -w "%{http_code}" -X POST "$$base/bootstrap" \
+        -H "Content-Type: application/json" \
+        -d '{"accept-terms-of-use": true}')
+      echo "bootstrap: $$code"
+      case "$$code" in
+        200|204|400|409) ;;
+        *) echo "bootstrap failed:"; cat /tmp/resp; echo; exit 1 ;;
+      esac
+
+      code=$$(curl -sS -o /tmp/resp -w "%{http_code}" -X POST "$$base/warehouse" \
+        -H "Content-Type: application/json" \
+        -d @/warehouse.json)
+      echo "warehouse: $$code"
+      case "$$code" in
+        200|201) ;;
+        400|409) echo "warehouse already exists (or rejected):"; cat /tmp/resp; echo ;;
+        *) echo "warehouse failed:"; cat /tmp/resp; echo; exit 1 ;;
+      esac

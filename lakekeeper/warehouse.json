@@ -1,0 +1,28 @@
+{
+  "allowed-format-versions": [
+    2
+  ], 
+  "default-format-version": 2,
+  "delete-profile": {
+    "expiration-seconds": 7200,
+    "type": "soft"
+  },
+  "managed-by": "self-managed",
+    "storage-credential": {
+    "type": "s3",
+    "credential-type": "access-key",
+    "aws-access-key-id": "root",
+    "aws-secret-access-key": "rootpass123"
+  },
+  "storage-profile": {
+    "bucket": "minilakehouse",
+    "endpoint": "http://minio-tblrka:9000",
+    "flavor": "s3-compat",
+    "path-style-access": true,
+    "region": "local-01",
+    "sts-enabled": true,
+    "type": "s3"
+
+  },
+  "warehouse-name": "SmallIceberg"
+}

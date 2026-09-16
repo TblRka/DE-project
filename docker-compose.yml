@@ -115,3 +115,15 @@ services:
         400|409) echo "warehouse already exists (or rejected):"; cat /tmp/resp; echo ;;
         *) echo "warehouse failed:"; cat /tmp/resp; echo; exit 1 ;;
       esac
+
+  trino:
+    image: trinodb/trino:483
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog
+    ports:
+      - 18080:8080
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+    
+

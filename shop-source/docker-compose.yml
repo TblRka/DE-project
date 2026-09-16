@@ -1,0 +1,91 @@
+name: shop-source
+
+# Источник данных для лейкхауса: Postgres с логической репликацией и генератор изменений.
+# Самостоятельный стенд, внешние системы подключаются:
+#   - с хоста: localhost:25432
+#   - из других compose-проектов: сеть shop-source-net, хост source-db:5432
+
+volumes:
+  source-pg-volume:
+    driver: local
+
+networks:
+  default:
+    name: shop-source-net # фиксированное имя, чтобы другой compose мог подключиться как external
+
+services:
+  source-db: # Схема, роли и публикация создаются из db/initdb при первом старте
+    image: postgres:17.6
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+      # WAL на диске при обычной работе: чекпоинт не реже чем при 256MB (по умолчанию 1GB).
+      # Слоты это не ограничивает, WAL под незанятый слот все равно копится, см. README
+      - -c
+      - max_wal_size=256MB
+      - -c
+      - min_wal_size=80MB
+    volumes:
+      - source-pg-volume:/var/lib/postgresql/data
+      - ./db/initdb:/docker-entrypoint-initdb.d:ro
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=sourcepass123
+      - POSTGRES_DB=source
+      - CDC_USER_PASSWORD=cdcpass123 # пароль cdc_user, читается в 01-init.sql
+      - APP_USER_PASSWORD=apppass123 # пароль shop_app (роль генератора)
+    ports:
+      - "25432:5432"
+    restart: always
+    healthcheck: # через TCP: во время init временный сервер слушает только сокет, так healthy не наступит раньше конца init
+      test: ["CMD", "pg_isready", "--host=127.0.0.1", "--username=admin", "--dbname=source"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  source-generator: # Наполняет source-db (seed) и непрерывно порождает изменения (run)
+    build: ./generator
+    image: shop-source-generator:0.2.0
+    restart: unless-stopped
+    depends_on:
+      source-db:
+        condition: service_healthy
+    environment:
+      - GENERATOR_MODE=seed,run # seed, run или оба через запятую
+      - DB_HOST=source-db
+      - DB_PORT=5432
+      - DB_NAME=source
+      - DB_USER=shop_app
+      - DB_PASSWORD=apppass123
+      - SEED_CUSTOMERS=500
+      - SEED_POINTS=40
+      - SEED_ORDERS=${SEED_ORDERS:-5000}
+      - SEED_DAYS=30
+      - CYCLE_PAUSE_SEC=5
+      - NEW_ORDERS_PER_MIN=20 # средний темп новых заказов
+      - ORDER_STEP_SEC=60 # характерное время между статусами заказа
+      - NEW_CUSTOMER_PROB=0.2
+      - CANCEL_RATE=0.05
+      - CUSTOMER_UPDATE_PROB=0.1
+      - POINT_UPDATE_PROB=0.05
+      - PURGE_PROB=0.02
+      - ORDER_RETENTION_DAYS=25
+      - PURGE_BATCH=500
+      - CUSTOMER_DELETE_PROB=0.01
+      - ANOMALY_RATE=0.02 # доля операций с updated_at задним числом
+      - ANOMALY_MIN_SEC=120
+      - ANOMALY_MAX_SEC=10800
+      # ограничение размера тома базы (все базы + WAL); можно задать при запуске: SIZE_LIMIT_MB=200 docker compose up -d
+      - SIZE_LIMIT_MB=${SIZE_LIMIT_MB:-3072} # жесткий лимит, 3 ГБ
+      - SIZE_THRESHOLD_PCT=${SIZE_THRESHOLD_PCT:-80} # порог режима удержания
+      - SIZE_AGGRESSIVE_PCT=${SIZE_AGGRESSIVE_PCT:-95} # с этого процента удаляем агрессивно
+      - SIZE_CHECK_EVERY_CYCLES=${SIZE_CHECK_EVERY_CYCLES:-12} # мерить размер раз в N циклов (~1 мин)
+      - HOLD_AGGRESSIVE_FACTOR=10
+      - HOLD_MIN_ORDERS=1000
+      - ORDERS_RECOUNT_EVERY_CYCLES=720 # полный count(*) заказов раз в N циклов (~1 час)
